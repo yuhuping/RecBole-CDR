@@ -1,0 +1,34 @@
+field_separator: "\t"
+data_path: "dataset"
+gpu_id: 0
+use_gpu: True
+eval_args:
+  split: {"LS": "valid_and_test"}
+  split_valid: {"RS": [0.8, 0.2]}
+  group_by: user
+  order: TO
+  mode: uni999
+metrics: ["Hit", "NDCG", "Recall", "MRR"]
+topk: [10]
+valid_metric: NDCG@10
+train_epochs: ["BOTH:300"]
+source_domain:
+  dataset: AmazonSport5NoItemOverlap
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]
+target_domain:
+  dataset: AmazonCloth5NoItemOverlap
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]

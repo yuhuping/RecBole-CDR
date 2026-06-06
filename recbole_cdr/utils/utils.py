@@ -9,6 +9,7 @@ recbole_cdr.utils.utils
 """
 
 import importlib
+import importlib.util
 
 from recbole_cdr.utils.enum_type import ModelType
 

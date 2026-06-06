@@ -14,6 +14,7 @@ recbole_cdr.data.utils
 import importlib
 import os
 import pickle
+from logging import getLogger
 
 from recbole.data.dataloader import NegSampleEvalDataLoader
 from recbole.data.utils import load_split_dataloaders, save_split_dataloaders, create_samplers
@@ -23,6 +24,26 @@ from recbole.utils.argument_list import dataset_arguments
 from recbole_cdr.data.dataloader import *
 from recbole_cdr.sampler import CrossDomainSourceSampler
 from recbole_cdr.utils import ModelType
+
+
+def _build_domain_eval_config(config, domain):
+    eval_config = config.update(config[f'{domain}_domain'])
+    eval_config['LABEL_FIELD'] = eval_config[f'{domain}_domain']['LABEL_FIELD']
+    eval_config['NEG_PREFIX'] = eval_config[f'{domain}_domain']['NEG_PREFIX']
+    return eval_config
+
+
+def _filter_overlap_users(dataset, eval_dataset, phase):
+    uid_field = dataset.target_domain_dataset.uid_field
+    overlap_mask = eval_dataset.inter_feat[uid_field] < dataset.num_overlap_user
+    filtered_dataset = eval_dataset.copy(eval_dataset.inter_feat[overlap_mask])
+    getLogger().info(
+        '%s evaluation restricted to %d overlapped users (%d interactions).',
+        phase.capitalize(),
+        len(filtered_dataset.inter_feat[uid_field].unique()),
+        len(filtered_dataset),
+    )
+    return filtered_dataset
 
 
 def create_dataset(config):
@@ -93,23 +114,32 @@ def data_preparation(config, dataset):
         source_train_dataset, source_valid_dataset, target_train_dataset, \
             target_valid_dataset, target_test_dataset = built_datasets
 
+        if config['eval_overlap_users_only']:
+            target_valid_dataset = _filter_overlap_users(dataset, target_valid_dataset, 'validation')
+            target_test_dataset = _filter_overlap_users(dataset, target_test_dataset, 'test')
+            built_datasets[3] = target_valid_dataset
+            built_datasets[4] = target_test_dataset
+
         target_train_sampler, target_valid_sampler, target_test_sampler = \
             create_samplers(config, dataset.target_domain_dataset, built_datasets[2:])
 
         if source_valid_dataset is not None:
             source_train_sampler, source_valid_sampler = create_source_samplers(config, dataset, built_datasets[:2])
             source_valid_data = get_dataloader(config, 'evaluation', 'source')(config, dataset, source_valid_dataset, source_valid_sampler, shuffle=False)
-            target_valid_data = get_dataloader(config, 'evaluation', 'target')(config, target_valid_dataset, target_valid_sampler, shuffle=False)
+            target_valid_config = _build_domain_eval_config(config, 'target')
+            target_valid_data = get_dataloader(config, 'evaluation', 'target')(target_valid_config, target_valid_dataset, target_valid_sampler, shuffle=False)
 
             valid_data = (source_valid_data, target_valid_data)
         else:
             source_train_sampler = CrossDomainSourceSampler('train', dataset, config['train_neg_sample_args']['distribution']).set_phase('train')
-            valid_data = get_dataloader(config, 'evaluation', 'target')(config, target_valid_dataset, target_valid_sampler, shuffle=False)
+            target_valid_config = _build_domain_eval_config(config, 'target')
+            valid_data = get_dataloader(config, 'evaluation', 'target')(target_valid_config, target_valid_dataset, target_valid_sampler, shuffle=False)
 
         train_data = get_dataloader(config, 'train', 'target')(config, dataset, source_train_dataset, source_train_sampler,
                                                            target_train_dataset, target_train_sampler, shuffle=True)
 
-        test_data = get_dataloader(config, 'evaluation', 'target')(config, target_test_dataset, target_test_sampler, shuffle=False)
+        target_test_config = _build_domain_eval_config(config, 'target')
+        test_data = get_dataloader(config, 'evaluation', 'target')(target_test_config, target_test_dataset, target_test_sampler, shuffle=False)
 
         if config['save_dataloaders']:
             save_split_dataloaders(config, dataloaders=(train_data, valid_data, test_data))
