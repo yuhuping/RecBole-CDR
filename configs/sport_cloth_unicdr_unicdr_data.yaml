@@ -3,6 +3,7 @@ data_path: "dataset"
 gpu_id: 0
 use_gpu: True
 show_progress: False
+seed: 42
 overlap_users_only: True
 eval_overlap_users_only: True
 seen_target_items_only: True
@@ -24,6 +25,7 @@ paired_domain_sampling: False
 learning_rate: 0.001
 weight_decay: 1e-5
 train_batch_size: 5120
+batches_per_epoch: 500
 lr_decay: 0.98
 decay_epoch: 10
 neg_sampling:
@@ -36,7 +38,9 @@ latent_dim: 128
 dropout: 0.3
 lambda_loss: 0.4
 maxlen: 10
-warmup_epochs: 10
+eval_maxlen: 50
+mask_rate: 0.1
+warmup_epochs: 0
 
 source_domain:
   dataset: AmazonSportUniCDR

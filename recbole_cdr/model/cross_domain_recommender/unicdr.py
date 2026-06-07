@@ -17,7 +17,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from recbole.model.init import xavier_normal_initialization
 from recbole.utils import InputType
 
 from recbole_cdr.model.crossdomain_recommender import CrossDomainRecommender
@@ -94,6 +93,8 @@ class UniCDR(CrossDomainRecommender):
         self.dropout_rate = dropout
         self.lambda_loss = config['lambda_loss']
         self.maxlen = config['maxlen']
+        self.eval_maxlen = config['eval_maxlen']
+        self.mask_rate = config['mask_rate']
         self.warmup_epochs = config['warmup_epochs']
         neg_sample_args = config['train_neg_sample_args']
         self.train_neg_sample_num = neg_sample_args.get(
@@ -136,7 +137,12 @@ class UniCDR(CrossDomainRecommender):
         self.register_buffer('target_hist', tgt_hist)   # [target_num_users, max_tgt_len]
         self.register_buffer('target_hlen', tgt_len)    # [target_num_users]
 
-        self.apply(xavier_normal_initialization)
+        # Match the official implementation's PyTorch default initialization.
+        # Padding must stay exactly zero because the aggregator detects padding
+        # from the embedding values rather than from item IDs.
+        with torch.no_grad():
+            self.source_item_emb.weight[0].zero_()
+            self.target_item_emb.weight[0].zero_()
         self._critic_loss = 0.0
 
     def set_phase(self, phase):
@@ -149,34 +155,82 @@ class UniCDR(CrossDomainRecommender):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ctx_emb(self, user_ids, hist_mat, item_emb):
-        """Return context item embeddings [B, maxlen, D], vectorized."""
-        take = min(hist_mat.size(1), self.maxlen)
-        ctx = hist_mat[user_ids, :take]                              # [B, take]
-        if take < self.maxlen:
-            pad = ctx.new_zeros(ctx.size(0), self.maxlen - take)
-            ctx = torch.cat([ctx, pad], dim=1)                       # [B, maxlen]
-        return item_emb(ctx)                                         # [B, maxlen, D]
+    def _ctx_emb(self, user_ids, hist_mat, item_emb, maxlen, exclude_item=None,
+                 apply_mask=False):
+        """Sample history context following the official UniCDR data pipeline."""
+        history = hist_mat[user_ids]
+        valid = history.ne(0)
+        history_len = valid.sum(dim=1)
+
+        if apply_mask:
+            keep = torch.floor(history_len.float() * (1 - self.mask_rate)).long()
+        else:
+            keep = history_len
+        keep = keep.clamp(max=maxlen)
+
+        take = min(history.size(1), maxlen)
+        if take:
+            if apply_mask:
+                priority = torch.rand(history.shape, device=history.device)
+                priority = priority.masked_fill(~valid, -1)
+                selected_idx = priority.topk(take, dim=1).indices
+                ctx = history.gather(1, selected_idx)
+            else:
+                # Evaluation must use one stable representation for all 1,000
+                # candidates belonging to the same user.
+                ctx = history[:, :take]
+            rank = torch.arange(take, device=history.device).unsqueeze(0)
+            ctx = ctx.masked_fill(rank >= keep.unsqueeze(1), 0)
+            if exclude_item is not None:
+                ctx = ctx.masked_fill(ctx.eq(exclude_item.unsqueeze(1)), 0)
+        else:
+            ctx = history.new_zeros((history.size(0), 0))
+
+        if take < maxlen:
+            pad = ctx.new_zeros(ctx.size(0), maxlen - take)
+            ctx = torch.cat([ctx, pad], dim=1)
+        return item_emb(ctx)
 
     def _global_ctx_emb(self, user_ids, domain):
-        """Cross-domain context: concatenate source + target history embeddings [B, 2*maxlen, D]."""
+        """Build global context with UniCDR's train/evaluation domain rules."""
+        context_len = self.maxlen if self.training else self.eval_maxlen
+        apply_mask = self.training
+
         if domain == 'source':
-            # For non-overlapping source users (id >= target_num_users), target history is empty.
             valid = (user_ids < self.target_num_users)
             clamped = user_ids.clamp(max=self.target_num_users - 1)
-            src_emb = self._ctx_emb(user_ids, self.source_hist, self.source_item_emb)
-            tgt_emb = self._ctx_emb(clamped, self.target_hist, self.target_item_emb)
+            if self.training:
+                src_emb = self.source_item_emb.weight.new_zeros(
+                    user_ids.size(0), context_len, self.source_item_emb.embedding_dim
+                )
+            else:
+                src_emb = self._ctx_emb(
+                    user_ids, self.source_hist, self.source_item_emb, context_len
+                )
+            tgt_emb = self._ctx_emb(
+                clamped, self.target_hist, self.target_item_emb, context_len,
+                apply_mask=apply_mask
+            )
             tgt_emb = tgt_emb * valid.float().unsqueeze(1).unsqueeze(2)
         else:
-            # For non-overlapping target users (id >= total_num_users after clamp = 0), src is empty.
             valid = (user_ids < self.total_num_users)
             clamped = user_ids.clamp(max=self.total_num_users - 1)
-            tgt_emb = self._ctx_emb(user_ids, self.target_hist, self.target_item_emb)
-            src_emb = self._ctx_emb(clamped, self.source_hist, self.source_item_emb)
+            if self.training:
+                tgt_emb = self.target_item_emb.weight.new_zeros(
+                    user_ids.size(0), context_len, self.target_item_emb.embedding_dim
+                )
+            else:
+                tgt_emb = self._ctx_emb(
+                    user_ids, self.target_hist, self.target_item_emb, context_len
+                )
+            src_emb = self._ctx_emb(
+                clamped, self.source_hist, self.source_item_emb, context_len,
+                apply_mask=apply_mask
+            )
             src_emb = src_emb * valid.float().unsqueeze(1).unsqueeze(2)
-        return torch.cat([src_emb, tgt_emb], dim=1)                 # [B, 2*maxlen, D]
+        return torch.cat([src_emb, tgt_emb], dim=1)
 
-    def _forward_user(self, domain, user_ids):
+    def _forward_user(self, domain, user_ids, positive_item=None):
         """
         Compute user representation = domain-specific + shared global.
         domain: 'source' (global user IDs) or 'target' (local target user IDs).
@@ -184,13 +238,23 @@ class UniCDR(CrossDomainRecommender):
         """
         if domain == 'source':
             id_emb = self.source_user_emb(user_ids)
-            ctx_emb = self._ctx_emb(user_ids, self.source_hist, self.source_item_emb)
+            ctx_emb = self._ctx_emb(
+                user_ids, self.source_hist, self.source_item_emb,
+                self.maxlen if self.training else self.eval_maxlen,
+                exclude_item=positive_item,
+                apply_mask=self.training,
+            )
             specific = self.source_agg(id_emb, ctx_emb)
             dis = self.source_dis
             global_id_emb = self.share_user_emb(user_ids)
         else:
             id_emb = self.target_user_emb(user_ids)
-            ctx_emb = self._ctx_emb(user_ids, self.target_hist, self.target_item_emb)
+            ctx_emb = self._ctx_emb(
+                user_ids, self.target_hist, self.target_item_emb,
+                self.maxlen if self.training else self.eval_maxlen,
+                exclude_item=positive_item,
+                apply_mask=self.training,
+            )
             specific = self.target_agg(id_emb, ctx_emb)
             dis = self.target_dis
             # Overlapping target users (id < overlapped_num_users) share global ID space.
@@ -226,14 +290,14 @@ class UniCDR(CrossDomainRecommender):
             user_num = user.size(0) // sample_num
             base_user = user[:user_num]
             base_pos_item = pos_item[:user_num]
-            user_e = self._forward_user(domain, base_user)
+            user_e = self._forward_user(domain, base_user, base_pos_item)
             pos_e = item_emb(base_pos_item)
             neg_e = item_emb(neg_item)
             pos_e = F.dropout(pos_e, self.dropout_rate, training=self.training)
             neg_e = F.dropout(neg_e, self.dropout_rate, training=self.training)
             neg_user_e = user_e.repeat(sample_num, 1)
         else:
-            user_e = self._forward_user(domain, user)
+            user_e = self._forward_user(domain, user, pos_item)
             pos_e = item_emb(pos_item)
             neg_e = item_emb(neg_item)
             pos_e = F.dropout(pos_e, self.dropout_rate, training=self.training)
@@ -277,12 +341,14 @@ class UniCDR(CrossDomainRecommender):
         if self.phase == 'SOURCE':
             user = interaction[self.SOURCE_USER_ID]
             item = interaction[self.SOURCE_ITEM_ID]
-            user_e = self._forward_user('source', user)
+            unique_user, inverse = torch.unique(user, sorted=False, return_inverse=True)
+            user_e = self._forward_user('source', unique_user)[inverse]
             item_e = self.source_item_emb(item)
         else:
             user = interaction[self.TARGET_USER_ID]
             item = interaction[self.TARGET_ITEM_ID]
-            user_e = self._forward_user('target', user)
+            unique_user, inverse = torch.unique(user, sorted=False, return_inverse=True)
+            user_e = self._forward_user('target', unique_user)[inverse]
             item_e = self.target_item_emb(item)
         return torch.sigmoid((user_e * item_e).sum(-1))
 

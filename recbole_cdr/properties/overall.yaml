@@ -39,6 +39,7 @@ eval_args:
 overlap_users_only: False
 eval_overlap_users_only: False
 paired_domain_sampling: False
+batches_per_epoch: ~
 seen_target_items_only: False
 lr_decay: ~
 decay_epoch: ~

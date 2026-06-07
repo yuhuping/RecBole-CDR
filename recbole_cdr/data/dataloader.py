@@ -67,6 +67,8 @@ class CrossDomainDataloader(AbstractDataLoader):
     def __init__(self, config, dataset, source_dataset, source_sampler, target_dataset, target_sampler,
                  shuffle=False):
         self.paired_domain_sampling = bool(config['paired_domain_sampling'])
+        self.batches_per_epoch = config['batches_per_epoch']
+        self.batches_yielded = 0
         config.update(config['source_domain'])
         config['LABEL_FIELD'] = source_dataset.label_field
         config['NEG_PREFIX'] = source_dataset.neg_prefix
@@ -156,6 +158,7 @@ class CrossDomainDataloader(AbstractDataLoader):
                 if self.shuffle:
                     np.random.shuffle(self.paired_order)
                 return self
+            self.batches_yielded = 0
             self.source_dataloader.__iter__()
             self.target_dataloader.__iter__()
             return self
@@ -171,6 +174,11 @@ class CrossDomainDataloader(AbstractDataLoader):
                 self.paired_pr = 0
                 raise StopIteration()
             return self._next_paired_batch_data()
+        if self.state == CrossDomainDataLoaderState.BOTH and self.batches_per_epoch:
+            if self.batches_yielded >= self.batches_per_epoch:
+                raise StopIteration()
+            self.batches_yielded += 1
+            return self._next_cycling_batch_data()
         if self.state == CrossDomainDataLoaderState.SOURCE and self.source_dataloader.pr >= self.source_dataloader.pr_end:
             self.target_dataloader.pr = 0
             self.source_dataloader.pr = 0
@@ -193,6 +201,8 @@ class CrossDomainDataloader(AbstractDataLoader):
         elif self.state == CrossDomainDataLoaderState.BOTH:
             if self.paired_domain_sampling:
                 return int(np.ceil(len(self.paired_order) / self.paired_step))
+            if self.batches_per_epoch:
+                return self.batches_per_epoch
             return len(self.target_dataloader)
         elif self.state == CrossDomainDataLoaderState.OVERLAP:
             return len(self.overlap_dataloader)
@@ -223,6 +233,20 @@ class CrossDomainDataloader(AbstractDataLoader):
             target_data = self.target_dataloader.__next__()
             target_data.update(source_data)
             return target_data
+
+    def _next_cycling_batch_data(self):
+        try:
+            source_data = self.source_dataloader.__next__()
+        except StopIteration:
+            self.source_dataloader.__iter__()
+            source_data = self.source_dataloader.__next__()
+        try:
+            target_data = self.target_dataloader.__next__()
+        except StopIteration:
+            self.target_dataloader.__iter__()
+            target_data = self.target_dataloader.__next__()
+        target_data.update(source_data)
+        return target_data
 
     def _next_paired_batch_data(self):
         indices = self.paired_order[self.paired_pr:self.paired_pr + self.paired_step]
