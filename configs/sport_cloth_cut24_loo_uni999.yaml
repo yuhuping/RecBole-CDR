@@ -3,6 +3,7 @@ data_path: "dataset"
 gpu_id: 0
 use_gpu: True
 show_progress: False
+overlap_users_only: True
 eval_overlap_users_only: True
 eval_args:
   split: {"LS": "valid_and_test"}
@@ -33,4 +34,4 @@ target_domain:
   LABEL_FIELD: label
   load_col:
     inter: [user_id, item_id, rating, timestamp]
-sim_emb_name: sim_emb_cut24_sport_cloth_overlap_eval.pkl
+sim_emb_name: sim_emb_cut24_sport_cloth_scenario1.pkl

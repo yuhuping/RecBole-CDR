@@ -3,6 +3,7 @@ data_path: "dataset"
 gpu_id: 1
 use_gpu: True
 show_progress: False
+overlap_users_only: True
 eval_overlap_users_only: True
 eval_args:
   split: {"LS": "valid_and_test"}

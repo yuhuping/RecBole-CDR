@@ -30,7 +30,7 @@ if [[ "${GPU_ID}" == "1" ]]; then
     run_model CUT_24 configs/sport_cloth_cut24_loo_uni999.yaml
     run_model DisenCDR configs/sport_cloth_disencdr_loo_uni999.yaml
     run_model CMF configs/sport_cloth_cmf_loo_uni999.yaml
-elif [[ "${GPU_ID}" == "3" ]]; then
+elif [[ "${GPU_ID}" == "2" ]]; then
     run_model DRLCDR configs/sport_cloth_drlcdr_loo_uni999.yaml
     run_model CoNet configs/sport_cloth_conet_loo_uni999.yaml
 else

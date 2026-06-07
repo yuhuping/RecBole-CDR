@@ -36,6 +36,7 @@ eval_args:
   group_by: user
   order: RO
   mode: full
+overlap_users_only: False
 eval_overlap_users_only: False
 repeatable: False
 metrics: ["Recall","MRR","NDCG","Hit","Precision"]
