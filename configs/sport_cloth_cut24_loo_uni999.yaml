@@ -5,6 +5,7 @@ use_gpu: True
 show_progress: False
 overlap_users_only: True
 eval_overlap_users_only: True
+seen_target_items_only: True
 eval_args:
   split: {"LS": "valid_and_test"}
   split_valid: {"RS": [0.8, 0.2]}

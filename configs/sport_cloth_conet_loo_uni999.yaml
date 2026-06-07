@@ -5,6 +5,7 @@ use_gpu: True
 show_progress: False
 overlap_users_only: True
 eval_overlap_users_only: True
+seen_target_items_only: True
 eval_args:
   split: {"LS": "valid_and_test"}
   split_valid: {"RS": [0.8, 0.2]}
@@ -14,7 +15,11 @@ eval_args:
 metrics: ["Hit", "NDCG", "Recall", "MRR"]
 topk: [10]
 valid_metric: NDCG@10
+eval_step: 5
 train_epochs: ["BOTH:300"]
+lr_decay: 0.9
+decay_epoch: 10
+stopping_step: 60
 source_domain:
   dataset: AmazonSport5NoItemOverlap
   USER_ID_FIELD: user_id

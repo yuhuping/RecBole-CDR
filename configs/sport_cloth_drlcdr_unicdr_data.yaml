@@ -1,6 +1,6 @@
 field_separator: "\t"
 data_path: "dataset"
-gpu_id: 0
+gpu_id: 1
 use_gpu: True
 show_progress: False
 overlap_users_only: True
@@ -29,28 +29,36 @@ hidden_size: 128
 n_layers: 2
 dropout: 0.3
 leakey: 0.1
-beta: 0.9
-rate: 0.5
+condi_weight: 0.3
+condi_non_weight: 10.0
+condi_condi_weight: 10.0
+isConditional: True
+isCondi_norm: False
 learning_rate: 0.001
 train_batch_size: 1024
 
 source_domain:
-  dataset: AmazonSport5NoItemOverlap
+  dataset: AmazonSportUniCDR
   USER_ID_FIELD: user_id
   ITEM_ID_FIELD: item_id
   RATING_FIELD: rating
   TIME_FIELD: timestamp
   NEG_PREFIX: neg_
   LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
   load_col:
     inter: [user_id, item_id, rating, timestamp]
 target_domain:
-  dataset: AmazonCloth5NoItemOverlap
+  dataset: AmazonClothUniCDR
+  benchmark_filename: ["train", "valid", "test"]
   USER_ID_FIELD: user_id
   ITEM_ID_FIELD: item_id
   RATING_FIELD: rating
   TIME_FIELD: timestamp
   NEG_PREFIX: neg_
   LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
   load_col:
     inter: [user_id, item_id, rating, timestamp]

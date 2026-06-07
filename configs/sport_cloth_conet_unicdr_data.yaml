@@ -16,41 +16,32 @@ metrics: ["Hit", "NDCG", "Recall", "MRR"]
 topk: [10]
 valid_metric: NDCG@10
 eval_step: 5
-train_epochs: ["BOTH:100"]
-paired_domain_sampling: True
-warmup_epochs: 10
+train_epochs: ["BOTH:300"]
 lr_decay: 0.9
 decay_epoch: 10
-stopping_step: 20
-
-# Model hyperparams
-embedding_size: 128
-hidden_size: 128
-n_layers: 2
-dropout: 0.3
-leakey: 0.1
-beta: 0.9
-rate: 0.5
-learning_rate: 0.001
-train_batch_size: 1024
-
+stopping_step: 60
 source_domain:
-  dataset: AmazonSport5NoItemOverlap
+  dataset: AmazonSportUniCDR
   USER_ID_FIELD: user_id
   ITEM_ID_FIELD: item_id
   RATING_FIELD: rating
   TIME_FIELD: timestamp
   NEG_PREFIX: neg_
   LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
   load_col:
     inter: [user_id, item_id, rating, timestamp]
 target_domain:
-  dataset: AmazonCloth5NoItemOverlap
+  dataset: AmazonClothUniCDR
+  benchmark_filename: ["train", "valid", "test"]
   USER_ID_FIELD: user_id
   ITEM_ID_FIELD: item_id
   RATING_FIELD: rating
   TIME_FIELD: timestamp
   NEG_PREFIX: neg_
   LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
   load_col:
     inter: [user_id, item_id, rating, timestamp]

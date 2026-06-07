@@ -91,8 +91,15 @@ class UniCDR(CrossDomainRecommender):
         aggregator = config['aggregator']
         lambda_a = config['lambda_a']
         dropout = config['dropout']
+        self.dropout_rate = dropout
         self.lambda_loss = config['lambda_loss']
         self.maxlen = config['maxlen']
+        self.warmup_epochs = config['warmup_epochs']
+        neg_sample_args = config['train_neg_sample_args']
+        self.train_neg_sample_num = neg_sample_args.get(
+            'sample_num', neg_sample_args.get('by', 1)
+        )
+        self.in_warmup = self.warmup_epochs > 0
 
         # Domain-specific embeddings (item 0 = padding)
         self.source_user_emb = nn.Embedding(self.total_num_users, dim)
@@ -134,6 +141,9 @@ class UniCDR(CrossDomainRecommender):
 
     def set_phase(self, phase):
         self.phase = phase
+
+    def set_train_epoch(self, epoch_idx):
+        self.in_warmup = epoch_idx < self.warmup_epochs
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -186,8 +196,13 @@ class UniCDR(CrossDomainRecommender):
             # Overlapping target users (id < overlapped_num_users) share global ID space.
             global_id_emb = self.share_user_emb(user_ids.clamp(max=self.total_num_users - 1))
 
+        specific = F.dropout(specific, self.dropout_rate, training=self.training)
+        if self.in_warmup:
+            return specific
+
         global_ctx = self._global_ctx_emb(user_ids, domain)         # [B, 2*maxlen, D]
         shared = self.global_agg(global_id_emb, global_ctx)
+        shared = F.dropout(shared, self.dropout_rate, training=self.training)
 
         # MI maximization: discriminator tries to distinguish specific↔shared (pos) from
         # shuffled↔shared (neg).
@@ -204,6 +219,32 @@ class UniCDR(CrossDomainRecommender):
 
         return specific + shared
 
+    def _domain_reconstruction_loss(self, domain, user, pos_item, neg_item, item_emb):
+        """Compute one domain loss without recomputing user contexts per negative."""
+        sample_num = max(int(self.train_neg_sample_num), 1)
+        if sample_num > 1 and user.size(0) % sample_num == 0:
+            user_num = user.size(0) // sample_num
+            base_user = user[:user_num]
+            base_pos_item = pos_item[:user_num]
+            user_e = self._forward_user(domain, base_user)
+            pos_e = item_emb(base_pos_item)
+            neg_e = item_emb(neg_item)
+            pos_e = F.dropout(pos_e, self.dropout_rate, training=self.training)
+            neg_e = F.dropout(neg_e, self.dropout_rate, training=self.training)
+            neg_user_e = user_e.repeat(sample_num, 1)
+        else:
+            user_e = self._forward_user(domain, user)
+            pos_e = item_emb(pos_item)
+            neg_e = item_emb(neg_item)
+            pos_e = F.dropout(pos_e, self.dropout_rate, training=self.training)
+            neg_e = F.dropout(neg_e, self.dropout_rate, training=self.training)
+            neg_user_e = user_e
+
+        pos_score = (user_e * pos_e).sum(-1)
+        neg_score = (neg_user_e * neg_e).sum(-1)
+        return self.criterion(pos_score, torch.ones_like(pos_score)) + \
+            self.criterion(neg_score, torch.zeros_like(neg_score))
+
     # ------------------------------------------------------------------
     # RecBole interface
     # ------------------------------------------------------------------
@@ -217,29 +258,17 @@ class UniCDR(CrossDomainRecommender):
             user = interaction[self.SOURCE_USER_ID]
             pos_item = interaction[self.SOURCE_ITEM_ID]
             neg_item = interaction[self.SOURCE_NEG_ITEM_ID]
-
-            user_e = self._forward_user('source', user)
-            pos_e = self.source_item_emb(pos_item)
-            neg_e = self.source_item_emb(neg_item)
-
-            pos_score = (user_e * pos_e).sum(-1)
-            neg_score = (user_e * neg_e).sum(-1)
-            loss_rec = loss_rec + self.criterion(pos_score, torch.ones_like(pos_score)) + \
-                                  self.criterion(neg_score, torch.zeros_like(neg_score))
+            loss_rec = loss_rec + self._domain_reconstruction_loss(
+                'source', user, pos_item, neg_item, self.source_item_emb
+            )
 
         if self.phase in ('TARGET', 'BOTH'):
             user = interaction[self.TARGET_USER_ID]
             pos_item = interaction[self.TARGET_ITEM_ID]
             neg_item = interaction[self.TARGET_NEG_ITEM_ID]
-
-            user_e = self._forward_user('target', user)
-            pos_e = self.target_item_emb(pos_item)
-            neg_e = self.target_item_emb(neg_item)
-
-            pos_score = (user_e * pos_e).sum(-1)
-            neg_score = (user_e * neg_e).sum(-1)
-            loss_rec = loss_rec + self.criterion(pos_score, torch.ones_like(pos_score)) + \
-                                  self.criterion(neg_score, torch.zeros_like(neg_score))
+            loss_rec = loss_rec + self._domain_reconstruction_loss(
+                'target', user, pos_item, neg_item, self.target_item_emb
+            )
 
         lam = self.lambda_loss
         return lam * loss_rec + (1 - lam) * self._critic_loss

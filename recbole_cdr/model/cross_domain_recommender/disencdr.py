@@ -5,8 +5,6 @@ Reference:
     Caiyuan Zheng et al. "DisenCDR: Learning Disentangled Representations for Cross-Domain Recommendation." in SIGIR 2022.
 """
 
-import numpy as np
-import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +14,7 @@ from torch.distributions.kl import kl_divergence
 from recbole_cdr.model.crossdomain_recommender import CrossDomainRecommender
 from recbole.utils import InputType
 
-from .gnn_modules.gcn import normalize, sparse_mx_to_torch_sparse_tensor, kld_gauss
+from .gnn_modules.gcn import build_domain_adjacency, kld_gauss
 from .gnn_modules.single_vbge import SingleVBGE
 from .gnn_modules.cross_vbge import CrossVBGE
 
@@ -44,6 +42,8 @@ class DisenCDR(CrossDomainRecommender):
         rate = config['rate'] if 'rate' in config else 0.5
 
         self.beta = beta
+        self.warmup_epochs = config['warmup_epochs'] if config['warmup_epochs'] is not None else 10
+        self.train_epoch = 0
 
         opt = {
             "feature_dim": dim,
@@ -62,13 +62,12 @@ class DisenCDR(CrossDomainRecommender):
         self.target_share_GNN = SingleVBGE(opt)
         self.share_GNN = CrossVBGE(opt)
 
-        # Embeddings: unified ID space
+        # Users share a global ID space; each GNN keeps its own local item space.
         N_u = self.total_num_users
-        N_i = self.total_num_items
         self.source_user_emb = nn.Embedding(N_u, dim)
         self.target_user_emb = nn.Embedding(N_u, dim)
-        self.source_item_emb = nn.Embedding(N_i, dim)
-        self.target_item_emb = nn.Embedding(N_i, dim)
+        self.source_item_emb = nn.Embedding(self.source_num_items, dim)
+        self.target_item_emb = nn.Embedding(self.target_num_items, dim)
         self.source_user_emb_share = nn.Embedding(N_u, dim)
         self.target_user_emb_share = nn.Embedding(N_u, dim)
 
@@ -76,22 +75,23 @@ class DisenCDR(CrossDomainRecommender):
         self.share_sigma = nn.Linear(dim * 2, dim)
 
         # Build sparse UV / VU adjacency matrices
-        src_mat = dataset.inter_matrix(form='coo', value_field=None, domain='source').astype(np.float32)
-        tgt_mat = dataset.inter_matrix(form='coo', value_field=None, domain='target').astype(np.float32)
-
-        self.source_UV = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(src_mat, shape=(N_u, N_i)))).to(self.device)
-        self.source_VU = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(src_mat.T, shape=(N_i, N_u)))).to(self.device)
-        self.target_UV = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(tgt_mat, shape=(N_u, N_i)))).to(self.device)
-        self.target_VU = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(tgt_mat.T, shape=(N_i, N_u)))).to(self.device)
+        self.source_UV, self.source_VU = build_domain_adjacency(
+            dataset, 'source', N_u, self.source_num_items,
+            self.target_num_items, self.overlapped_num_items,
+        )
+        self.target_UV, self.target_VU = build_domain_adjacency(
+            dataset, 'target', N_u, self.source_num_items,
+            self.target_num_items, self.overlapped_num_items,
+        )
+        self.source_UV = self.source_UV.to(self.device)
+        self.source_VU = self.source_VU.to(self.device)
+        self.target_UV = self.target_UV.to(self.device)
+        self.target_VU = self.target_VU.to(self.device)
 
         # User/item index tensors
         self._u_idx = torch.arange(N_u, device=self.device)
-        self._si_idx = torch.arange(N_i, device=self.device)
-        self._ti_idx = torch.arange(N_i, device=self.device)
+        self._si_idx = torch.arange(self.source_num_items, device=self.device)
+        self._ti_idx = torch.arange(self.target_num_items, device=self.device)
 
         # Cache for evaluation
         self._target_user_cache = None
@@ -156,19 +156,31 @@ class DisenCDR(CrossDomainRecommender):
         self.kld_loss = 0
         return src_sp_u, src_sp_i, tgt_sp_u, tgt_sp_i
 
+    def set_train_epoch(self, epoch_idx):
+        self.train_epoch = epoch_idx
+
+    def _source_item_to_local(self, item):
+        return torch.where(
+            item < self.overlapped_num_items,
+            item,
+            item - (self.target_num_items - self.overlapped_num_items),
+        )
+
     def calculate_loss(self, interaction):
         self._target_user_cache = None
         self._target_item_cache = None
 
         src_u_idx = interaction[self.SOURCE_USER_ID]
-        src_i_idx = interaction[self.SOURCE_ITEM_ID]
+        src_i_idx = self._source_item_to_local(interaction[self.SOURCE_ITEM_ID])
         src_label = interaction[self.SOURCE_LABEL]
         tgt_u_idx = interaction[self.TARGET_USER_ID]
         tgt_i_idx = interaction[self.TARGET_ITEM_ID]
         tgt_label = interaction[self.TARGET_LABEL]
 
-        # Use warmup for first 10% of training (approximate via epoch tracking not available, skip)
-        src_u, src_i, tgt_u, tgt_i = self._forward()
+        if self.train_epoch < self.warmup_epochs:
+            src_u, src_i, tgt_u, tgt_i = self._warmup_forward()
+        else:
+            src_u, src_i, tgt_u, tgt_i = self._forward()
 
         src_user_f = src_u[src_u_idx]
         src_item_f = src_i[src_i_idx]
@@ -179,9 +191,13 @@ class DisenCDR(CrossDomainRecommender):
         tgt_score = (tgt_user_f * tgt_item_f).sum(dim=-1)
 
         bce = nn.BCEWithLogitsLoss()
-        loss = (bce(src_score, src_label.float()) +
-                bce(tgt_score, tgt_label.float()) +
-                self.kld_loss)
+        specific_kld = (
+            self.source_specific_GNN.encoder[-1].kld_loss
+            + self.target_specific_GNN.encoder[-1].kld_loss
+        )
+        loss = (2 * bce(src_score, src_label.float()) +
+                2 * bce(tgt_score, tgt_label.float()) +
+                specific_kld + self.kld_loss)
 
         return loss
 

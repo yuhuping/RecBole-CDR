@@ -11,10 +11,32 @@ from torch.distributions import Normal
 
 def normalize(mx):
     rowsum = np.array(mx.sum(1))
-    r_inv = np.power(rowsum, -1).flatten()
-    r_inv[np.isinf(r_inv)] = 0.
+    r_inv = np.zeros_like(rowsum, dtype=np.float32)
+    np.divide(1.0, rowsum, out=r_inv, where=rowsum != 0)
+    r_inv = r_inv.flatten()
     r_mat_inv = sp.diags(r_inv)
     return r_mat_inv.dot(mx)
+
+
+def build_domain_adjacency(dataset, domain, user_num, source_item_num,
+                           target_item_num, overlap_item_num):
+    matrix = dataset.inter_matrix(form='coo', value_field=None, domain=domain).astype(np.float32)
+    columns = matrix.col.copy()
+    if domain == 'source':
+        source_only = columns >= target_item_num
+        columns[source_only] -= target_item_num - overlap_item_num
+        item_num = source_item_num
+    else:
+        item_num = target_item_num
+
+    local_matrix = sp.coo_matrix(
+        (matrix.data, (matrix.row, columns)),
+        shape=(user_num, item_num),
+        dtype=np.float32,
+    )
+    uv = sparse_mx_to_torch_sparse_tensor(normalize(local_matrix))
+    vu = sparse_mx_to_torch_sparse_tensor(normalize(local_matrix.T))
+    return uv, vu
 
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):

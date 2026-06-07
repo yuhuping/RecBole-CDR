@@ -5,8 +5,6 @@ Reference:
     Disentangled Representation Learning for Cross-Domain Recommendation with Conditional Variational Graph Networks.
 """
 
-import numpy as np
-import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,7 +12,7 @@ import torch.nn.functional as F
 from recbole_cdr.model.crossdomain_recommender import CrossDomainRecommender
 from recbole.utils import InputType
 
-from .gnn_modules.gcn import normalize, sparse_mx_to_torch_sparse_tensor, kld_gauss
+from .gnn_modules.gcn import build_domain_adjacency, kld_gauss
 from .gnn_modules.single_vbge import SingleVBGE
 from .gnn_modules.conditional_vbge import ConditionalVBGE
 
@@ -44,6 +42,9 @@ class DRLCDR(CrossDomainRecommender):
 
         self.condi_non_weight = condi_non_weight
         self.condi_condi_weight = condi_condi_weight
+        self.condi_weight = condi_weight
+        self.warmup_epochs = config['warmup_epochs'] if config['warmup_epochs'] is not None else 10
+        self.train_epoch = 0
 
         opt = {
             "feature_dim": dim,
@@ -66,29 +67,30 @@ class DRLCDR(CrossDomainRecommender):
 
         # Embeddings
         N_u = self.total_num_users
-        N_i = self.total_num_items
         self.source_user_emb = nn.Embedding(N_u, dim)
         self.target_user_emb = nn.Embedding(N_u, dim)
-        self.source_item_emb = nn.Embedding(N_i, dim)
-        self.target_item_emb = nn.Embedding(N_i, dim)
+        self.source_item_emb = nn.Embedding(self.source_num_items, dim)
+        self.target_item_emb = nn.Embedding(self.target_num_items, dim)
         self.source_user_emb_share = nn.Embedding(N_u, dim)
         self.target_user_emb_share = nn.Embedding(N_u, dim)
 
         # Build sparse UV / VU matrices
-        src_mat = dataset.inter_matrix(form='coo', value_field=None, domain='source').astype(np.float32)
-        tgt_mat = dataset.inter_matrix(form='coo', value_field=None, domain='target').astype(np.float32)
-
-        self.source_UV = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(src_mat, shape=(N_u, N_i)))).to(self.device)
-        self.source_VU = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(src_mat.T, shape=(N_i, N_u)))).to(self.device)
-        self.target_UV = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(tgt_mat, shape=(N_u, N_i)))).to(self.device)
-        self.target_VU = sparse_mx_to_torch_sparse_tensor(
-            normalize(sp.coo_matrix(tgt_mat.T, shape=(N_i, N_u)))).to(self.device)
+        self.source_UV, self.source_VU = build_domain_adjacency(
+            dataset, 'source', N_u, self.source_num_items,
+            self.target_num_items, self.overlapped_num_items,
+        )
+        self.target_UV, self.target_VU = build_domain_adjacency(
+            dataset, 'target', N_u, self.source_num_items,
+            self.target_num_items, self.overlapped_num_items,
+        )
+        self.source_UV = self.source_UV.to(self.device)
+        self.source_VU = self.source_VU.to(self.device)
+        self.target_UV = self.target_UV.to(self.device)
+        self.target_VU = self.target_VU.to(self.device)
 
         self._u_idx = torch.arange(N_u, device=self.device)
-        self._si_idx = torch.arange(N_i, device=self.device)
+        self._si_idx = torch.arange(self.source_num_items, device=self.device)
+        self._ti_idx = torch.arange(self.target_num_items, device=self.device)
 
         self._target_user_cache = None
         self._target_item_cache = None
@@ -116,7 +118,7 @@ class DRLCDR(CrossDomainRecommender):
         src_u = self.source_user_emb(self._u_idx)
         tgt_u = self.target_user_emb(self._u_idx)
         src_i = self.source_item_emb(self._si_idx)
-        tgt_i = self.target_item_emb(self._si_idx)
+        tgt_i = self.target_item_emb(self._ti_idx)
         src_u_share = self.source_user_emb_share(self._u_idx)
         tgt_u_share = self.target_user_emb_share(self._u_idx)
 
@@ -133,8 +135,8 @@ class DRLCDR(CrossDomainRecommender):
             src_sp_u, tgt_sp_u
         )
 
-        condi_src_u, condi_src_kld = self._reparameters(cs_mean, cs_sigma, 1.0)
-        condi_tgt_u, condi_tgt_kld = self._reparameters(ct_mean, ct_sigma, 1.0)
+        condi_src_u, condi_src_kld = self._reparameters(cs_mean, cs_sigma, self.condi_weight)
+        condi_tgt_u, condi_tgt_kld = self._reparameters(ct_mean, ct_sigma, self.condi_weight)
 
         src_condi_kld = kld_gauss(cs_mean, cs_sigma, src_mean, src_sigma)
         tgt_condi_kld = kld_gauss(ct_mean, ct_sigma, tgt_mean, tgt_sigma)
@@ -150,26 +152,54 @@ class DRLCDR(CrossDomainRecommender):
 
         return src_learn_u, src_sp_i, tgt_learn_u, tgt_sp_i
 
+    def _warmup_forward(self):
+        src_u = self.source_user_emb(self._u_idx)
+        tgt_u = self.target_user_emb(self._u_idx)
+        src_i = self.source_item_emb(self._si_idx)
+        tgt_i = self.target_item_emb(self._ti_idx)
+
+        src_sp_u, src_sp_i = self.source_specific_GNN(src_u, src_i, self.source_UV, self.source_VU)
+        tgt_sp_u, tgt_sp_i = self.target_specific_GNN(tgt_u, tgt_i, self.target_UV, self.target_VU)
+        self.kld_loss = 0
+        return src_sp_u, src_sp_i, tgt_sp_u, tgt_sp_i
+
+    def set_train_epoch(self, epoch_idx):
+        self.train_epoch = epoch_idx
+
+    def _source_item_to_local(self, item):
+        return torch.where(
+            item < self.overlapped_num_items,
+            item,
+            item - (self.target_num_items - self.overlapped_num_items),
+        )
+
     def calculate_loss(self, interaction):
         self._target_user_cache = None
         self._target_item_cache = None
 
         src_u_idx = interaction[self.SOURCE_USER_ID]
-        src_i_idx = interaction[self.SOURCE_ITEM_ID]
+        src_i_idx = self._source_item_to_local(interaction[self.SOURCE_ITEM_ID])
         src_label = interaction[self.SOURCE_LABEL]
         tgt_u_idx = interaction[self.TARGET_USER_ID]
         tgt_i_idx = interaction[self.TARGET_ITEM_ID]
         tgt_label = interaction[self.TARGET_LABEL]
 
-        src_u, src_i, tgt_u, tgt_i = self._forward()
+        if self.train_epoch < self.warmup_epochs:
+            src_u, src_i, tgt_u, tgt_i = self._warmup_forward()
+        else:
+            src_u, src_i, tgt_u, tgt_i = self._forward()
 
         src_score = (src_u[src_u_idx] * src_i[src_i_idx]).sum(dim=-1)
         tgt_score = (tgt_u[tgt_u_idx] * tgt_i[tgt_i_idx]).sum(dim=-1)
 
         bce = nn.BCEWithLogitsLoss()
-        loss = (bce(src_score, src_label.float()) +
-                bce(tgt_score, tgt_label.float()) +
-                self.kld_loss)
+        specific_kld = (
+            self.source_specific_GNN.encoder[-1].kld_loss
+            + self.target_specific_GNN.encoder[-1].kld_loss
+        )
+        loss = (2 * bce(src_score, src_label.float()) +
+                2 * bce(tgt_score, tgt_label.float()) +
+                specific_kld + self.kld_loss)
         return loss
 
     def _get_eval_embeddings(self):

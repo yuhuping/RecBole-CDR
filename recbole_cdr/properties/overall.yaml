@@ -38,6 +38,10 @@ eval_args:
   mode: full
 overlap_users_only: False
 eval_overlap_users_only: False
+paired_domain_sampling: False
+seen_target_items_only: False
+lr_decay: ~
+decay_epoch: ~
 repeatable: False
 metrics: ["Recall","MRR","NDCG","Hit","Precision"]
 topk: [10]

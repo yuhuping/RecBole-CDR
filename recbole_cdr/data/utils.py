@@ -16,14 +16,31 @@ import os
 import pickle
 from logging import getLogger
 
+import numpy as np
+
 from recbole.data.dataloader import NegSampleEvalDataLoader
 from recbole.data.utils import load_split_dataloaders, save_split_dataloaders, create_samplers
+from recbole.sampler import Sampler
 from recbole.utils import set_color
 from recbole.utils.argument_list import dataset_arguments
 
 from recbole_cdr.data.dataloader import *
 from recbole_cdr.sampler import CrossDomainSourceSampler
 from recbole_cdr.utils import ModelType
+
+
+class SeenItemSampler(Sampler):
+    """Sample negatives only from items observed in the target training split."""
+
+    def __init__(self, phases, datasets, distribution, candidate_item_ids):
+        self.candidate_item_ids = np.asarray(candidate_item_ids, dtype=np.int64)
+        super().__init__(phases, datasets, distribution)
+
+    def _uni_sampling(self, sample_num):
+        return np.random.choice(self.candidate_item_ids, size=sample_num, replace=True)
+
+    def _get_candidates_list(self):
+        return self.datasets[0].inter_feat[self.iid_field].numpy().tolist()
 
 
 def _build_domain_eval_config(config, domain):
@@ -44,6 +61,51 @@ def _filter_overlap_users(dataset, eval_dataset, phase):
         len(filtered_dataset),
     )
     return filtered_dataset
+
+
+def _filter_seen_target_items(train_dataset, eval_dataset, phase):
+    iid_field = train_dataset.iid_field
+    seen_items = np.unique(train_dataset.inter_feat[iid_field].numpy())
+    seen_mask = np.isin(eval_dataset.inter_feat[iid_field].numpy(), seen_items)
+    filtered_dataset = eval_dataset.copy(eval_dataset.inter_feat[seen_mask])
+    getLogger().info(
+        '%s evaluation retained %d/%d interactions whose items occur in target training.',
+        phase.capitalize(),
+        len(filtered_dataset),
+        len(eval_dataset),
+    )
+    return filtered_dataset
+
+
+def _create_seen_item_samplers(config, built_datasets):
+    phases = ['train', 'valid', 'test']
+    train_dataset = built_datasets[0]
+    iid_field = train_dataset.iid_field
+    candidate_item_ids = np.unique(train_dataset.inter_feat[iid_field].numpy())
+    candidate_item_ids = candidate_item_ids[candidate_item_ids != 0]
+
+    train_args = config['train_neg_sample_args']
+    eval_args = config['eval_neg_sample_args']
+    sampler = None
+    train_sampler = valid_sampler = test_sampler = None
+
+    if train_args['strategy'] != 'none':
+        sampler = SeenItemSampler(
+            phases, built_datasets, train_args['distribution'], candidate_item_ids
+        )
+        train_sampler = sampler.set_phase('train')
+
+    if eval_args['strategy'] != 'none':
+        if sampler is None:
+            sampler = SeenItemSampler(
+                phases, built_datasets, eval_args['distribution'], candidate_item_ids
+            )
+        else:
+            sampler.set_distribution(eval_args['distribution'])
+        valid_sampler = sampler.set_phase('valid')
+        test_sampler = sampler.set_phase('test')
+
+    return train_sampler, valid_sampler, test_sampler
 
 
 def create_dataset(config):
@@ -120,8 +182,20 @@ def data_preparation(config, dataset):
             built_datasets[3] = target_valid_dataset
             built_datasets[4] = target_test_dataset
 
-        target_train_sampler, target_valid_sampler, target_test_sampler = \
-            create_samplers(config, dataset.target_domain_dataset, built_datasets[2:])
+        if config['seen_target_items_only']:
+            target_valid_dataset = _filter_seen_target_items(
+                target_train_dataset, target_valid_dataset, 'validation'
+            )
+            target_test_dataset = _filter_seen_target_items(
+                target_train_dataset, target_test_dataset, 'test'
+            )
+            built_datasets[3] = target_valid_dataset
+            built_datasets[4] = target_test_dataset
+            target_train_sampler, target_valid_sampler, target_test_sampler = \
+                _create_seen_item_samplers(config, built_datasets[2:])
+        else:
+            target_train_sampler, target_valid_sampler, target_test_sampler = \
+                create_samplers(config, dataset.target_domain_dataset, built_datasets[2:])
 
         if source_valid_dataset is not None:
             source_train_sampler, source_valid_sampler = create_source_samplers(config, dataset, built_datasets[:2])

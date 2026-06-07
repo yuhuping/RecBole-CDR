@@ -66,6 +66,7 @@ class CrossDomainDataloader(AbstractDataLoader):
 
     def __init__(self, config, dataset, source_dataset, source_sampler, target_dataset, target_sampler,
                  shuffle=False):
+        self.paired_domain_sampling = bool(config['paired_domain_sampling'])
         config.update(config['source_domain'])
         config['LABEL_FIELD'] = source_dataset.label_field
         config['NEG_PREFIX'] = source_dataset.neg_prefix
@@ -83,6 +84,52 @@ class CrossDomainDataloader(AbstractDataLoader):
         self.dataset.target_domain_dataset = target_dataset
         self.overlap_dataset = self.dataset.overlap_dataset
         self.overlap_dataloader = OverlapDataloader(config, self.overlap_dataset, sampler=None, shuffle=shuffle)
+        if self.paired_domain_sampling:
+            self._init_paired_domain_sampling(config)
+
+    def _init_paired_domain_sampling(self, config):
+        if config['train_neg_sample_args']['strategy'] != 'by' \
+                or config['train_neg_sample_args']['by'] != 1:
+            raise ValueError('Paired domain sampling requires one pointwise negative per positive.')
+
+        source_uid = self.source_dataset.uid_field
+        source_iid = self.source_dataset.iid_field
+        target_uid = self.target_dataset.uid_field
+        target_iid = self.target_dataset.iid_field
+
+        source_users = self.source_dataset.inter_feat[source_uid].numpy()
+        source_items = self.source_dataset.inter_feat[source_iid].numpy()
+        target_users = self.target_dataset.inter_feat[target_uid].numpy()
+        target_items = self.target_dataset.inter_feat[target_iid].numpy()
+
+        self.paired_users = np.concatenate((source_users, target_users))
+        self.paired_source_items = np.concatenate((
+            source_items,
+            np.full(len(target_items), -1, dtype=np.int64),
+        ))
+        self.paired_target_items = np.concatenate((
+            np.full(len(source_items), -1, dtype=np.int64),
+            target_items,
+        ))
+
+        user_num = self.dataset.num_total_user
+        self.source_user_items = [[] for _ in range(user_num)]
+        self.target_user_items = [[] for _ in range(user_num)]
+        for user, item in zip(source_users, source_items):
+            self.source_user_items[user].append(item)
+        for user, item in zip(target_users, target_items):
+            self.target_user_items[user].append(item)
+
+        missing_source = [user for user in np.unique(self.paired_users)
+                          if not self.source_user_items[user]]
+        missing_target = [user for user in np.unique(self.paired_users)
+                          if not self.target_user_items[user]]
+        if missing_source or missing_target:
+            raise ValueError('Paired domain sampling requires every training user in both domains.')
+
+        self.paired_step = max(config['train_batch_size'] // 2, 1)
+        self.paired_order = np.arange(len(self.paired_users))
+        self.paired_pr = 0
 
     def _init_batch_size_and_step(self):
         pass
@@ -90,6 +137,8 @@ class CrossDomainDataloader(AbstractDataLoader):
     def reinit_pr_after_map(self):
         self.source_dataloader.pr = 0
         self.target_dataloader.pr = 0
+        if self.paired_domain_sampling:
+            self.paired_pr = 0
 
     def update_config(self, config):
         self.source_dataloader.update_config(config)
@@ -102,6 +151,11 @@ class CrossDomainDataloader(AbstractDataLoader):
         elif self.state == CrossDomainDataLoaderState.TARGET:
             return self.target_dataloader.__iter__()
         elif self.state == CrossDomainDataLoaderState.BOTH:
+            if self.paired_domain_sampling:
+                self.paired_pr = 0
+                if self.shuffle:
+                    np.random.shuffle(self.paired_order)
+                return self
             self.source_dataloader.__iter__()
             self.target_dataloader.__iter__()
             return self
@@ -112,6 +166,11 @@ class CrossDomainDataloader(AbstractDataLoader):
         pass
 
     def __next__(self):
+        if self.state == CrossDomainDataLoaderState.BOTH and self.paired_domain_sampling:
+            if self.paired_pr >= len(self.paired_order):
+                self.paired_pr = 0
+                raise StopIteration()
+            return self._next_paired_batch_data()
         if self.state == CrossDomainDataLoaderState.SOURCE and self.source_dataloader.pr >= self.source_dataloader.pr_end:
             self.target_dataloader.pr = 0
             self.source_dataloader.pr = 0
@@ -132,6 +191,8 @@ class CrossDomainDataloader(AbstractDataLoader):
         elif self.state == CrossDomainDataLoaderState.TARGET:
             return len(self.target_dataloader)
         elif self.state == CrossDomainDataLoaderState.BOTH:
+            if self.paired_domain_sampling:
+                return int(np.ceil(len(self.paired_order) / self.paired_step))
             return len(self.target_dataloader)
         elif self.state == CrossDomainDataLoaderState.OVERLAP:
             return len(self.overlap_dataloader)
@@ -143,6 +204,8 @@ class CrossDomainDataloader(AbstractDataLoader):
         elif self.state == CrossDomainDataLoaderState.OVERLAP:
             return self.overlap_dataloader.pr_end
         else:
+            if self.paired_domain_sampling:
+                return len(self.paired_order)
             return self.target_dataloader.pr_end
 
     def _next_batch_data(self):
@@ -160,6 +223,37 @@ class CrossDomainDataloader(AbstractDataLoader):
             target_data = self.target_dataloader.__next__()
             target_data.update(source_data)
             return target_data
+
+    def _next_paired_batch_data(self):
+        indices = self.paired_order[self.paired_pr:self.paired_pr + self.paired_step]
+        self.paired_pr += self.paired_step
+
+        users = self.paired_users[indices]
+        source_pos = self.paired_source_items[indices].copy()
+        target_pos = self.paired_target_items[indices].copy()
+
+        for idx, user in enumerate(users):
+            if source_pos[idx] < 0:
+                source_pos[idx] = np.random.choice(self.source_user_items[user])
+            if target_pos[idx] < 0:
+                target_pos[idx] = np.random.choice(self.target_user_items[user])
+
+        source_neg = self.source_dataloader.sampler.sample_by_user_ids(users, source_pos, 1)
+        target_neg = self.target_dataloader.sampler.sample_by_user_ids(users, target_pos, 1)
+
+        users = torch.as_tensor(users, dtype=torch.int64)
+        source_pos = torch.as_tensor(source_pos, dtype=torch.int64)
+        target_pos = torch.as_tensor(target_pos, dtype=torch.int64)
+        labels = torch.cat((torch.ones(len(users)), torch.zeros(len(users))))
+
+        return Interaction({
+            self.source_dataset.uid_field: torch.cat((users, users)),
+            self.source_dataset.iid_field: torch.cat((source_pos, source_neg)),
+            self.source_dataset.label_field: labels,
+            self.target_dataset.uid_field: torch.cat((users, users)),
+            self.target_dataset.iid_field: torch.cat((target_pos, target_neg)),
+            self.target_dataset.label_field: labels.clone(),
+        })
 
     def set_mode(self, state):
         """Set the mode of :class:`CrossDomainDataloaderDataLoader`, it can be set to three states:
