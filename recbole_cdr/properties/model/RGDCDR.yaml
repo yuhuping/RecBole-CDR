@@ -1,0 +1,31 @@
+embedding_size: 512
+gamma: 0.999
+aggregator: transformer
+history_len: 10
+
+diffuser_type: mlp1
+timestep: 2000
+ddim_stride: 100
+uncon_w: 5.0
+uncon_p: 0.1
+beta_sche: linear
+dropout: 0.1
+layer_norm: 1
+
+n_heads: 4
+n_layers: 1
+mean_pooling: 0
+loss_n: bpr
+source_loss_weight: 0.2
+
+reliability_hidden: 64
+diffusion_loss_weight: 1.0
+negative_transfer_weight: 0.1
+gate_regularization: 1e-4
+transfer_scale: 1.0
+guidance_floor: 1.0
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none
