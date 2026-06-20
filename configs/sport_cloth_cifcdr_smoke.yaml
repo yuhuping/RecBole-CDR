@@ -1,0 +1,87 @@
+field_separator: "\t"
+data_path: "dataset"
+gpu_id: 0
+use_gpu: True
+show_progress: False
+seed: 2024
+eval_candidate_seed: 2024
+
+overlap_users_only: True
+eval_overlap_users_only: True
+seen_target_items_only: True
+paired_domain_sampling: False
+
+eval_args:
+  split: {"LS": "valid_and_test"}
+  split_valid: {"RS": [0.8, 0.2]}
+  group_by: user
+  order: TO
+  mode: uni999
+metrics: ["Hit", "NDCG", "Recall", "MRR"]
+topk: [10]
+valid_metric: NDCG@10
+eval_batch_size: 8192
+
+embedding_size: 128
+gamma: 0.999
+aggregator: transformer
+history_len: 10
+diffuser_type: mlp1
+timestep: 200
+ddim_stride: 50
+uncon_w: 5.0
+uncon_p: 0.1
+beta_sche: linear
+dropout: 0.1
+layer_norm: 1
+n_heads: 4
+n_layers: 1
+mean_pooling: 0
+loss_n: bpr
+source_loss_weight: 0.2
+
+transfer_scale: 0.05
+transfer_loss_weight: 0.01
+noise_adv_weight: 0.005
+decorrelation_weight: 0.01
+safety_weight: 0.05
+gate_regularization: 0.0001
+grl_lambda: 0.5
+gate_initial_bias: -2.0
+
+train_epochs: ["BOTH:2"]
+train_batch_size: 512
+batches_per_epoch: 2
+learning_rate: 0.0001
+weight_decay: 1e-7
+eval_step: 1
+stopping_step: 2
+neg_sampling:
+  uniform: 1
+
+source_domain:
+  dataset: AmazonSportUniCDR
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]
+
+target_domain:
+  dataset: AmazonClothUniCDR
+  benchmark_filename: ["train", "valid", "test"]
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]

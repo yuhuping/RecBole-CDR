@@ -1,0 +1,19 @@
+embedding_size: 256
+normalize_scores: False
+prototype_score_weight: 0.0
+generation_score_weight: 0.0
+transfer_scale: 0.0
+transfer_warmup_epochs: 100
+hard_negative_weight: 0.0
+hard_negative_warmup_epochs: 100
+local_loss_weight: 0.0
+safe_transfer_weight: 0.0
+denoise_weight: 0.0
+alignment_weight: 0.0
+diversity_weight: 0.0
+
+train_epochs: ["BOTH:30"]
+batches_per_epoch: 100
+eval_batch_size: 64000
+eval_step: 1
+stopping_step: 10

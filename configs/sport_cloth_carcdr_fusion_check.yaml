@@ -1,0 +1,6 @@
+# Framework-level verification of the frozen anchor and expert fusion.
+train_epochs: ["BOTH:1"]
+batches_per_epoch: 1
+eval_step: 1
+stopping_step: 1
+eval_batch_size: 64000

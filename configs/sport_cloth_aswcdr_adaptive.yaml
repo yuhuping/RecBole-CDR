@@ -1,0 +1,2 @@
+adaptive_source_weighting: True
+use_source_curriculum: False

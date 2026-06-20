@@ -1,0 +1,4 @@
+train_epochs: ["BOTH:250"]
+backbone_warmup_epochs: 200
+eval_step: 10
+stopping_step: 250

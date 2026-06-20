@@ -1,0 +1,19 @@
+embedding_size: 512
+private_size: 64
+gate_hidden_size: 32
+local_scale: 0.03
+transfer_scale: 0.03
+gate_initial_bias: -1.0
+
+source_loss_weight: 0.2
+anchor_loss_weight: 1.0
+local_loss_weight: 0.2
+safety_weight: 0.2
+gate_supervision_weight: 0.05
+gate_sparsity_weight: 0.0001
+embedding_reg_weight: 0.0000001
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

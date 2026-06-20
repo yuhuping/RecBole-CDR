@@ -1,0 +1,16 @@
+shared_size: 512
+expert_size: 128
+history_len: 20
+gate_hidden_size: 32
+
+source_loss_weight: 0.2
+expert_loss_weight: 0.5
+safety_weight: 0.1
+diversity_weight: 0.01
+reg_weight: 0.0000001
+consensus_weight: 0.2
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

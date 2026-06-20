@@ -32,12 +32,36 @@ from recbole_cdr.utils import ModelType
 class SeenItemSampler(Sampler):
     """Sample negatives only from items observed in the target training split."""
 
-    def __init__(self, phases, datasets, distribution, candidate_item_ids):
+    def __init__(
+        self,
+        phases,
+        datasets,
+        distribution,
+        candidate_item_ids,
+        seed,
+    ):
         self.candidate_item_ids = np.asarray(candidate_item_ids, dtype=np.int64)
+        self.base_seed = seed
+        self.sampling_seed = seed
+        self.rng = np.random.RandomState(seed)
         super().__init__(phases, datasets, distribution)
 
+    def set_phase(self, phase):
+        sampler = super().set_phase(phase)
+        phase_offset = {'train': 0, 'valid': 1, 'test': 2}[phase]
+        sampler.sampling_seed = sampler.base_seed + phase_offset
+        sampler.reset_sampling()
+        return sampler
+
+    def reset_sampling(self):
+        self.rng = np.random.RandomState(self.sampling_seed)
+
     def _uni_sampling(self, sample_num):
-        return np.random.choice(self.candidate_item_ids, size=sample_num, replace=True)
+        return self.rng.choice(
+            self.candidate_item_ids,
+            size=sample_num,
+            replace=True,
+        )
 
     def _get_candidates_list(self):
         return self.datasets[0].inter_feat[self.iid_field].numpy().tolist()
@@ -86,19 +110,30 @@ def _create_seen_item_samplers(config, built_datasets):
 
     train_args = config['train_neg_sample_args']
     eval_args = config['eval_neg_sample_args']
+    eval_seed = getattr(config, 'final_config_dict', {}).get(
+        'eval_candidate_seed', 2024
+    )
     sampler = None
     train_sampler = valid_sampler = test_sampler = None
 
     if train_args['strategy'] != 'none':
         sampler = SeenItemSampler(
-            phases, built_datasets, train_args['distribution'], candidate_item_ids
+            phases,
+            built_datasets,
+            train_args['distribution'],
+            candidate_item_ids,
+            eval_seed,
         )
         train_sampler = sampler.set_phase('train')
 
     if eval_args['strategy'] != 'none':
         if sampler is None:
             sampler = SeenItemSampler(
-                phases, built_datasets, eval_args['distribution'], candidate_item_ids
+                phases,
+                built_datasets,
+                eval_args['distribution'],
+                candidate_item_ids,
+                eval_seed,
             )
         else:
             sampler.set_distribution(eval_args['distribution'])
@@ -252,6 +287,8 @@ def get_dataloader(config, phase, domain='target'):
             return CrossDomainFullSortEvalDataLoader
         eval_strategy = config['eval_neg_sample_args']['strategy']
         if eval_strategy in {'none', 'by'}:
+            if eval_strategy == 'by':
+                return DeterministicNegSampleEvalDataLoader
             return NegSampleEvalDataLoader
         elif eval_strategy == 'full':
             return FullSortEvalDataLoader

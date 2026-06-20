@@ -17,9 +17,22 @@ import torch
 
 from recbole.data.interaction import Interaction
 from recbole.data.dataloader.abstract_dataloader import AbstractDataLoader
-from recbole.data.dataloader.general_dataloader import TrainDataLoader, FullSortEvalDataLoader
+from recbole.data.dataloader.general_dataloader import (
+    FullSortEvalDataLoader,
+    NegSampleEvalDataLoader,
+    TrainDataLoader,
+)
 
 from recbole_cdr.utils import CrossDomainDataLoaderState
+
+
+class DeterministicNegSampleEvalDataLoader(NegSampleEvalDataLoader):
+    """Reset the evaluation sampler before every complete pass."""
+
+    def __iter__(self):
+        if hasattr(self.sampler, 'reset_sampling'):
+            self.sampler.reset_sampling()
+        return super().__iter__()
 
 
 class OverlapDataloader(AbstractDataLoader):
