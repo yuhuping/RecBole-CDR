@@ -1,0 +1,27 @@
+# DisenCDR-data override for phone->sport. Load AFTER a model config.
+source_domain:
+  dataset: Disen_phone_sport_S
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]
+
+target_domain:
+  dataset: Disen_phone_sport_T
+  benchmark_filename: ["train", "valid", "test"]
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]

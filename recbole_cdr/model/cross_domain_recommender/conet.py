@@ -198,7 +198,7 @@ class CoNet(CrossDomainRecommender):
         reg_loss = 0
         for para in self.crossparas:
             reg_loss += torch.norm(para.weight)
-        loss = loss_s + loss_t + reg_loss
+        loss = loss_s + loss_t + self.reg_weight * reg_loss
 
         return loss
 

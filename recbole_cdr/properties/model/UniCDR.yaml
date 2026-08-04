@@ -1,0 +1,11 @@
+task: dual-user-intra
+aggregator: user_attention    # mean / user_attention / item_similarity
+lambda_a: 0.5                 # weight between id embedding and aggregated sequence embedding
+latent_dim: 64
+dropout: 0.0
+lambda_loss: 0.8              # weight of rec loss vs. discriminator (MI) loss
+maxlen: 50                    # max history length for context aggregation
+eval_maxlen: 50
+mask_rate: 0.1
+warmup_epochs: 0
+weight_decay: 1e-6

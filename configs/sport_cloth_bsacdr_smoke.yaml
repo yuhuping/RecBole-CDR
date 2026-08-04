@@ -1,0 +1,4 @@
+train_epochs: ["BOTH:1"]
+batches_per_epoch: 2
+eval_step: 1
+stopping_step: 1

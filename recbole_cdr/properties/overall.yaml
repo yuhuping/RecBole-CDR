@@ -30,12 +30,19 @@ loss_decimal_place: 4
 require_pow: False
 
 # evaluation settings
-eval_args: 
+eval_args:
   split: {'RS':[0.8,0.1,0.1]}
   split_valid: {'RS':[0.8,0.2]}
   group_by: user
   order: RO
   mode: full
+overlap_users_only: False
+eval_overlap_users_only: False
+paired_domain_sampling: False
+batches_per_epoch: ~
+seen_target_items_only: False
+lr_decay: ~
+decay_epoch: ~
 repeatable: False
 metrics: ["Recall","MRR","NDCG","Hit","Precision"]
 topk: [10]

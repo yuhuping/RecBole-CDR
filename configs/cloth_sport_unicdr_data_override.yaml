@@ -1,0 +1,30 @@
+# Reverse-direction data override. Load this after a sport_cloth_*_unicdr_data.yaml
+# model config so only the source/target datasets are exchanged.
+sim_emb_name: sim_emb_cut24_cloth_sport_unicdr_data.pkl
+
+source_domain:
+  dataset: AmazonClothUniCDRSource
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]
+
+target_domain:
+  dataset: AmazonSportUniCDRTarget
+  benchmark_filename: ["train", "valid", "test"]
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  user_inter_num_interval: ~
+  item_inter_num_interval: ~
+  load_col:
+    inter: [user_id, item_id, rating, timestamp]

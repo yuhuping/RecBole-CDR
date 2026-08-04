@@ -1,0 +1,3 @@
+adaptive_source_weighting: True
+weighting_mode: scarcity
+use_source_curriculum: False

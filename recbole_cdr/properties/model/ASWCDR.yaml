@@ -1,0 +1,16 @@
+embedding_size: 512
+source_loss_weight: 0.2
+adaptive_source_weighting: True
+weighting_mode: joint
+use_source_curriculum: True
+scarcity_power: 1.0
+minimum_user_weight: 0.25
+maximum_user_weight: 2.0
+minimum_source_scale: 0.25
+curriculum_epochs: 250
+embedding_reg_weight: 0.0000001
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

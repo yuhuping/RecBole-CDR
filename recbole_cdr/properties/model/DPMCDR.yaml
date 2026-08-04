@@ -1,0 +1,28 @@
+embedding_size: 256
+num_prototypes: 4
+history_len: 20
+score_temperature: 0.2
+transfer_scale: 0.5
+identity_score_weight: 1.0
+prototype_score_weight: 0.5
+generation_score_weight: 0.5
+normalize_scores: True
+transfer_warmup_epochs: 5
+hard_negative_warmup_epochs: 5
+
+source_loss_weight: 0.3
+local_loss_weight: 0.5
+safe_transfer_weight: 0.2
+hard_negative_weight: 0.05
+hard_negative_pool_size: 64
+denoise_weight: 0.05
+alignment_weight: 0.01
+diversity_weight: 0.001
+embedding_reg_weight: 0.000001
+max_noise: 0.5
+denoise_mask_probability: 0.5
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

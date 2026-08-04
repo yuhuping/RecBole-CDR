@@ -1,0 +1,39 @@
+embedding_size: 64
+num_interests: 4
+history_len: 20
+routing_temperature: 0.2
+gate_hidden_size: 64
+gate_bias: -0.5
+transfer_dropout: 0.2
+local_score_scale: 0.0
+transfer_score_scale: 0.0
+max_local_score_scale: 0.005
+max_transfer_score_scale: 0.005
+gate_prior: 0.25
+gate_prior_weight: 0.01
+anchor_safe_weight: 0.2
+hard_negative_weight: 0.5
+hard_negative_pool_size: 128
+pretrained_cmf_path: ~
+pretrained_cdcdr_path: ~
+pretrained_cut_path: ~
+pretrained_unicdr_path: ~
+freeze_anchor: True
+anchor_cache_batch_size: 512
+anchor_sampling_seed: 2024
+anchor_warmup_epochs: 1
+expert_fusion_weight: 0.5
+cut_fusion_weight: 0.0
+unicdr_fusion_weight: 0.0
+consensus_weight: 0.0
+
+source_loss_weight: 0.5
+local_loss_weight: 0.3
+safe_transfer_weight: 0.2
+diversity_weight: 0.001
+safety_margin: 0.0
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

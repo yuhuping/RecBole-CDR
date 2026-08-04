@@ -1,0 +1,5 @@
+train_epochs: ["BOTH:20"]
+batches_per_epoch: 100
+eval_batch_size: 64000
+eval_step: 1
+stopping_step: 8

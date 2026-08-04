@@ -1,0 +1,19 @@
+embedding_size: 256
+adapter_size: 64
+num_particles: 4
+refinement_steps: 3
+score_temperature: 0.2
+gate_initial_bias: -2.0
+
+source_loss_weight: 0.2
+contrastive_weight: 0.05
+reconstruction_weight: 0.05
+safety_weight: 0.1
+balance_weight: 0.01
+diversity_weight: 0.001
+embedding_reg_weight: 0.000001
+
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  dynamic: none

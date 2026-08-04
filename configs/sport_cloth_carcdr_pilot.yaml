@@ -1,0 +1,12 @@
+# Short learning-curve check. This is not a formal experiment configuration.
+embedding_size: 128
+num_interests: 4
+history_len: 20
+gate_hidden_size: 64
+
+train_epochs: ["BOTH:6"]
+train_batch_size: 512
+batches_per_epoch: 100
+eval_batch_size: 4096
+eval_step: 2
+stopping_step: 3

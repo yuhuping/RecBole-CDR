@@ -14,15 +14,133 @@ recbole_cdr.data.utils
 import importlib
 import os
 import pickle
+from logging import getLogger
+
+import numpy as np
 
 from recbole.data.dataloader import NegSampleEvalDataLoader
 from recbole.data.utils import load_split_dataloaders, save_split_dataloaders, create_samplers
+from recbole.sampler import Sampler
 from recbole.utils import set_color
 from recbole.utils.argument_list import dataset_arguments
 
 from recbole_cdr.data.dataloader import *
 from recbole_cdr.sampler import CrossDomainSourceSampler
 from recbole_cdr.utils import ModelType
+
+
+class SeenItemSampler(Sampler):
+    """Sample negatives only from items observed in the target training split."""
+
+    def __init__(
+        self,
+        phases,
+        datasets,
+        distribution,
+        candidate_item_ids,
+        seed,
+    ):
+        self.candidate_item_ids = np.asarray(candidate_item_ids, dtype=np.int64)
+        self.base_seed = seed
+        self.sampling_seed = seed
+        self.rng = np.random.RandomState(seed)
+        super().__init__(phases, datasets, distribution)
+
+    def set_phase(self, phase):
+        sampler = super().set_phase(phase)
+        phase_offset = {'train': 0, 'valid': 1, 'test': 2}[phase]
+        sampler.sampling_seed = sampler.base_seed + phase_offset
+        sampler.reset_sampling()
+        return sampler
+
+    def reset_sampling(self):
+        self.rng = np.random.RandomState(self.sampling_seed)
+
+    def _uni_sampling(self, sample_num):
+        return self.rng.choice(
+            self.candidate_item_ids,
+            size=sample_num,
+            replace=True,
+        )
+
+    def _get_candidates_list(self):
+        return self.datasets[0].inter_feat[self.iid_field].numpy().tolist()
+
+
+def _build_domain_eval_config(config, domain):
+    eval_config = config.update(config[f'{domain}_domain'])
+    eval_config['LABEL_FIELD'] = eval_config[f'{domain}_domain']['LABEL_FIELD']
+    eval_config['NEG_PREFIX'] = eval_config[f'{domain}_domain']['NEG_PREFIX']
+    return eval_config
+
+
+def _filter_overlap_users(dataset, eval_dataset, phase):
+    uid_field = dataset.target_domain_dataset.uid_field
+    overlap_mask = eval_dataset.inter_feat[uid_field] < dataset.num_overlap_user
+    filtered_dataset = eval_dataset.copy(eval_dataset.inter_feat[overlap_mask])
+    getLogger().info(
+        '%s evaluation restricted to %d overlapped users (%d interactions).',
+        phase.capitalize(),
+        len(filtered_dataset.inter_feat[uid_field].unique()),
+        len(filtered_dataset),
+    )
+    return filtered_dataset
+
+
+def _filter_seen_target_items(train_dataset, eval_dataset, phase):
+    iid_field = train_dataset.iid_field
+    seen_items = np.unique(train_dataset.inter_feat[iid_field].numpy())
+    seen_mask = np.isin(eval_dataset.inter_feat[iid_field].numpy(), seen_items)
+    filtered_dataset = eval_dataset.copy(eval_dataset.inter_feat[seen_mask])
+    getLogger().info(
+        '%s evaluation retained %d/%d interactions whose items occur in target training.',
+        phase.capitalize(),
+        len(filtered_dataset),
+        len(eval_dataset),
+    )
+    return filtered_dataset
+
+
+def _create_seen_item_samplers(config, built_datasets):
+    phases = ['train', 'valid', 'test']
+    train_dataset = built_datasets[0]
+    iid_field = train_dataset.iid_field
+    candidate_item_ids = np.unique(train_dataset.inter_feat[iid_field].numpy())
+    candidate_item_ids = candidate_item_ids[candidate_item_ids != 0]
+
+    train_args = config['train_neg_sample_args']
+    eval_args = config['eval_neg_sample_args']
+    eval_seed = getattr(config, 'final_config_dict', {}).get(
+        'eval_candidate_seed', 2024
+    )
+    sampler = None
+    train_sampler = valid_sampler = test_sampler = None
+
+    if train_args['strategy'] != 'none':
+        sampler = SeenItemSampler(
+            phases,
+            built_datasets,
+            train_args['distribution'],
+            candidate_item_ids,
+            eval_seed,
+        )
+        train_sampler = sampler.set_phase('train')
+
+    if eval_args['strategy'] != 'none':
+        if sampler is None:
+            sampler = SeenItemSampler(
+                phases,
+                built_datasets,
+                eval_args['distribution'],
+                candidate_item_ids,
+                eval_seed,
+            )
+        else:
+            sampler.set_distribution(eval_args['distribution'])
+        valid_sampler = sampler.set_phase('valid')
+        test_sampler = sampler.set_phase('test')
+
+    return train_sampler, valid_sampler, test_sampler
 
 
 def create_dataset(config):
@@ -93,23 +211,44 @@ def data_preparation(config, dataset):
         source_train_dataset, source_valid_dataset, target_train_dataset, \
             target_valid_dataset, target_test_dataset = built_datasets
 
-        target_train_sampler, target_valid_sampler, target_test_sampler = \
-            create_samplers(config, dataset.target_domain_dataset, built_datasets[2:])
+        if config['eval_overlap_users_only']:
+            target_valid_dataset = _filter_overlap_users(dataset, target_valid_dataset, 'validation')
+            target_test_dataset = _filter_overlap_users(dataset, target_test_dataset, 'test')
+            built_datasets[3] = target_valid_dataset
+            built_datasets[4] = target_test_dataset
+
+        if config['seen_target_items_only']:
+            target_valid_dataset = _filter_seen_target_items(
+                target_train_dataset, target_valid_dataset, 'validation'
+            )
+            target_test_dataset = _filter_seen_target_items(
+                target_train_dataset, target_test_dataset, 'test'
+            )
+            built_datasets[3] = target_valid_dataset
+            built_datasets[4] = target_test_dataset
+            target_train_sampler, target_valid_sampler, target_test_sampler = \
+                _create_seen_item_samplers(config, built_datasets[2:])
+        else:
+            target_train_sampler, target_valid_sampler, target_test_sampler = \
+                create_samplers(config, dataset.target_domain_dataset, built_datasets[2:])
 
         if source_valid_dataset is not None:
             source_train_sampler, source_valid_sampler = create_source_samplers(config, dataset, built_datasets[:2])
             source_valid_data = get_dataloader(config, 'evaluation', 'source')(config, dataset, source_valid_dataset, source_valid_sampler, shuffle=False)
-            target_valid_data = get_dataloader(config, 'evaluation', 'target')(config, target_valid_dataset, target_valid_sampler, shuffle=False)
+            target_valid_config = _build_domain_eval_config(config, 'target')
+            target_valid_data = get_dataloader(config, 'evaluation', 'target')(target_valid_config, target_valid_dataset, target_valid_sampler, shuffle=False)
 
             valid_data = (source_valid_data, target_valid_data)
         else:
             source_train_sampler = CrossDomainSourceSampler('train', dataset, config['train_neg_sample_args']['distribution']).set_phase('train')
-            valid_data = get_dataloader(config, 'evaluation', 'target')(config, target_valid_dataset, target_valid_sampler, shuffle=False)
+            target_valid_config = _build_domain_eval_config(config, 'target')
+            valid_data = get_dataloader(config, 'evaluation', 'target')(target_valid_config, target_valid_dataset, target_valid_sampler, shuffle=False)
 
         train_data = get_dataloader(config, 'train', 'target')(config, dataset, source_train_dataset, source_train_sampler,
                                                            target_train_dataset, target_train_sampler, shuffle=True)
 
-        test_data = get_dataloader(config, 'evaluation', 'target')(config, target_test_dataset, target_test_sampler, shuffle=False)
+        target_test_config = _build_domain_eval_config(config, 'target')
+        test_data = get_dataloader(config, 'evaluation', 'target')(target_test_config, target_test_dataset, target_test_sampler, shuffle=False)
 
         if config['save_dataloaders']:
             save_split_dataloaders(config, dataloaders=(train_data, valid_data, test_data))
@@ -148,6 +287,8 @@ def get_dataloader(config, phase, domain='target'):
             return CrossDomainFullSortEvalDataLoader
         eval_strategy = config['eval_neg_sample_args']['strategy']
         if eval_strategy in {'none', 'by'}:
+            if eval_strategy == 'by':
+                return DeterministicNegSampleEvalDataLoader
             return NegSampleEvalDataLoader
         elif eval_strategy == 'full':
             return FullSortEvalDataLoader

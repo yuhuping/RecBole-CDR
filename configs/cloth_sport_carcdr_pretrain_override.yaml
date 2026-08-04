@@ -1,0 +1,3 @@
+# Load after cloth_sport_unicdr_data_override.yaml.
+pretrained_cmf_path: "saved/CMF-Jun-07-2026_21-20-06.pth"
+pretrained_cdcdr_path: "saved/CDCDR-Jun-09-2026_21-14-24.pth"

@@ -1,0 +1,11 @@
+embedding_size: 512
+adapter_size: 64
+num_particles: 4
+refinement_steps: 3
+learning_rate: 0.0002
+train_batch_size: 1024
+train_epochs: ["BOTH:30"]
+batches_per_epoch: 100
+eval_batch_size: 64000
+eval_step: 1
+stopping_step: 10

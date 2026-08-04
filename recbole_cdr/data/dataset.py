@@ -322,6 +322,9 @@ class CrossDomainDataset:
         # token link remap
         self.source_domain_dataset.remap_user_item_id(self.user_link_dict, self.item_link_dict)
 
+        if config['overlap_users_only']:
+            self._retain_overlapped_users()
+
         # user and item ID remap
         self.source_user_ID_remap_dict, self.source_item_ID_remap_dict, \
         self.target_user_ID_remap_dict, self.target_item_ID_remap_dict = self.calculate_user_item_from_both_domain()
@@ -340,6 +343,34 @@ class CrossDomainDataset:
         else:
             self.overlap_dataset = CrossDomainOverlapDataset(config, self.num_overlap_item)
         self.overlap_id_field = self.overlap_dataset.overlap_id_field
+
+    def _retain_overlapped_users(self):
+        source_uid = self.source_domain_dataset.uid_field
+        target_uid = self.target_domain_dataset.uid_field
+        source_users = set(self.source_domain_dataset.inter_feat[source_uid])
+        target_users = set(self.target_domain_dataset.inter_feat[target_uid])
+        overlap_users = source_users & target_users
+
+        self.source_domain_dataset.inter_feat = self.source_domain_dataset.inter_feat[
+            self.source_domain_dataset.inter_feat[source_uid].isin(overlap_users)
+        ].reset_index(drop=True)
+        self.target_domain_dataset.inter_feat = self.target_domain_dataset.inter_feat[
+            self.target_domain_dataset.inter_feat[target_uid].isin(overlap_users)
+        ].reset_index(drop=True)
+
+        if self.source_domain_dataset.user_feat is not None:
+            self.source_domain_dataset.user_feat = self.source_domain_dataset.user_feat[
+                self.source_domain_dataset.user_feat[source_uid].isin(overlap_users)
+            ].reset_index(drop=True)
+        if self.target_domain_dataset.user_feat is not None:
+            self.target_domain_dataset.user_feat = self.target_domain_dataset.user_feat[
+                self.target_domain_dataset.user_feat[target_uid].isin(overlap_users)
+            ].reset_index(drop=True)
+
+        self.logger.info(
+            'Scenario 1 user filtering retained %d users shared by both domains.',
+            len(overlap_users),
+        )
 
     def calculate_user_item_from_both_domain(self):
         """Prepare the remap dict for the users and items in both domain.
